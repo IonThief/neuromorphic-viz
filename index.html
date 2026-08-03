@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neuromorphic-Viz | Retinal Dynamics</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="simulation-wrapper">
+        <header class="controls">
+            <div class="control-group">
+                <label for="stimulus-type">Light Pattern:</label>
+                <select id="stimulus-type">
+                    <option value="manual">Manual Slider</option>
+                    <option value="square">Square Wave</option>
+                    <option value="sine">Sine Wave</option>
+                    <option value="sawtooth">Sawtooth</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="intensity">Light Intensity: <span id="intensity-val">10</span></label>
+                <input type="range" id="intensity" min="0" max="100" value="10">
+            </div>
+            <div class="control-group">
+                <label for="gain">Sensitivity: <span id="gain-val">12</span>x</label>
+                <input type="range" id="gain" min="1" max="50" step="1" value="5">
+            </div>
+            <div class="control-group">
+                <label for="leak">Membrane Leak Rate (mV/setp): <span id="leak-val">0.5</span></label>
+                <input type="range" id="leak" min="0" max="10" step="0.1" value="2">
+            </div>
+            <div class="control-group">
+                <label for="threshold">Spike Threshold: <span id="threshold-val">40</span></label>
+                <input type="range" id="threshold" min="30" max="150" value="80">
+            </div>
+            <div class="control-group">
+                <label for="noise">Synaptic Noise: <span id="noise-val">2</span></label>
+                <input type="range" id="noise" min="0" max="10" step="0.5" value="2">
+            </div>
+        </header>
+
+        <main class="pipeline-container">
+            <svg id="connection-lines" class="overlay-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+
+            <!-- Column 1 & 2 -->
+            <div class="node source-node" id="node-led">
+                <img src=".assets/bulb.jpg" alt="Light Source" id="img-led">
+                <div class="label">Light Source</div>
+            </div>
+            
+            <div class="node receptor-node" id="node-photoreceptor">
+                <div class="fx-container" id="fx-photo"></div>
+                <img src=".assets/photoreceptor_cells.jpg" alt="Photoreceptors" id="img-photo">
+                <div class="label">Photoreceptors<br><span id="rhodopsin-val" style="color: #8b949e; font-size: 0.75rem;">Pigment: 100%</span></div>
+            </div>
+
+            <!-- Column 3 -->
+            <div class="column-split">
+                <div class="node bipolar-node" id="node-bipolar-on">
+                    <img src=".assets/bipolar_cell.svg" alt="ON Bipolar" id="img-bipolar-on">
+                    <div class="label">ON Bipolar (+dV/dt)</div>
+                </div>
+                <div class="node bipolar-node" id="node-bipolar-off">
+                    <img src=".assets/bipolar_cell.svg" alt="OFF Bipolar" id="img-bipolar-off" style="filter: hue-rotate(180deg);">
+                    <div class="label">OFF Bipolar (-dV/dt)</div>
+                </div>
+            </div>
+
+            <!-- Column 4 -->
+            <div class="column-split">
+                <div class="node ganglion-node" id="node-ganglion-on">
+                    <div class="fx-container" id="fx-ganglion-on"></div>
+                    <img src=".assets/ganglion_cell.png" alt="ON Ganglion">
+                    <div class="label">ON Ganglion</div>
+                    <div class="fill-bar-container">
+                        <div id="fill-on" class="fill-bar fill-on-color"></div>
+                        <div id="thresh-on" class="threshold-line"></div>
+                    </div>
+                </div>
+                <div class="node ganglion-node" id="node-ganglion-off">
+                    <div class="fx-container" id="fx-ganglion-off"></div>
+                    <img src=".assets/ganglion_cell.png" alt="OFF Ganglion">
+                    <div class="label">OFF Ganglion</div>
+                    <div class="fill-bar-container">
+                        <div id="fill-off" class="fill-bar fill-off-color"></div>
+                        <div id="thresh-off" class="threshold-line"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Column 5 -->
+            <div class="column-split">
+                <div class="node nerve-node" id="node-nerve-on">
+                    <img src=".assets/optic_nerve.jpg" alt="ON Nerve">
+                    <div class="label">ON Spike</div>
+                </div>
+                <div class="node nerve-node" id="node-nerve-off">
+                    <img src=".assets/optic_nerve.jpg" alt="OFF Nerve">
+                    <div class="label">OFF Spike</div>
+                </div>
+            </div>
+        </main>
+
+        <section class="graphs-wrapper">
+            <div class="graph-box">
+                <h3 style="color: #00ffcc;">Input Light Intensity</h3>
+                <canvas id="graph-stimulus" width="800" height="80"></canvas>
+            </div>
+            <div class="graph-box">
+                <h3 style="color: #43e97b;">ON Pathway (+dV/dt)</h3>
+                <canvas id="graph-on" width="800" height="120"></canvas>
+            </div>
+            <div class="graph-box">
+                <h3 style="color: #ff758c;">OFF Pathway (-dV/dt)</h3>
+                <canvas id="graph-off" width="800" height="120"></canvas>
+            </div>
+        </section>
+    </div>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
