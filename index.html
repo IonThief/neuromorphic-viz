@@ -1,122 +1,516 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neuromorphic-Viz | Retinal Dynamics</title>
-    <link rel="stylesheet" href="css/styles.css">
-</head>
-<body>
-    <div class="simulation-wrapper">
-        <header class="controls">
-            <div class="control-group">
-                <label for="stimulus-type">Light Pattern:</label>
-                <select id="stimulus-type">
-                    <option value="manual">Manual Slider</option>
-                    <option value="square">Square Wave</option>
-                    <option value="sine">Sine Wave</option>
-                    <option value="sawtooth">Sawtooth</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="intensity">Light Intensity: <span id="intensity-val">10</span></label>
-                <input type="range" id="intensity" min="0" max="100" value="10">
-            </div>
-            <div class="control-group">
-                <label for="gain">Sensitivity: <span id="gain-val">12</span>x</label>
-                <input type="range" id="gain" min="1" max="50" step="1" value="5">
-            </div>
-            <div class="control-group">
-                <label for="leak">Membrane Leak Rate (mV/setp): <span id="leak-val">0.5</span></label>
-                <input type="range" id="leak" min="0" max="10" step="0.1" value="2">
-            </div>
-            <div class="control-group">
-                <label for="threshold">Spike Threshold: <span id="threshold-val">40</span></label>
-                <input type="range" id="threshold" min="30" max="150" value="80">
-            </div>
-            <div class="control-group">
-                <label for="noise">Synaptic Noise: <span id="noise-val">2</span></label>
-                <input type="range" id="noise" min="0" max="10" step="0.5" value="2">
-            </div>
-        </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neuromorphic Retina Visualizer</title>
+    <style>
+      :root {
+        --bg: #0d0d0d;
+        --panel: #171717;
+        --text: #ececec;
+        --accent: #00e5ff;
+        --border: #2d2d2d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body,
+      html {
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: var(--bg);
+        color: var(--text);
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        overflow: hidden;
+      }
+      .app-container {
+        display: flex;
+        width: 100vw;
+        height: 100vh;
+      }
 
-        <main class="pipeline-container">
-            <svg id="connection-lines" class="overlay-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+      /* Sidebar */
+      #control-panel {
+        width: 340px;
+        flex-shrink: 0;
+        background-color: var(--panel);
+        padding: 20px;
+        border-right: 1px solid var(--border);
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        overflow-y: auto;
+      }
+      h2,
+      h3 {
+        margin: 0;
+        color: var(--accent);
+      }
+      h2 {
+        font-size: 1.2rem;
+        margin-bottom: 5px;
+      }
+      h3 {
+        font-size: 0.9rem;
+        border-bottom: 1px solid #333;
+        padding-bottom: 5px;
+        color: #aaa;
+        margin-top: 10px;
+      }
+      .input-group {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .input-group label {
+        font-size: 0.85rem;
+        display: flex;
+        justify-content: space-between;
+        width: 130px;
+      }
+      .input-group input[type='number'] {
+        width: 50px;
+        padding: 4px;
+        background: #222;
+        border: 1px solid #444;
+        color: white;
+        border-radius: 4px;
+      }
+      .input-group input[type='range'],
+      .input-group select {
+        flex-grow: 1;
+        margin-left: 10px;
+        background: #222;
+        color: white;
+        border: 1px solid #444;
+        padding: 4px;
+        border-radius: 4px;
+      }
 
-            <!-- Column 1 & 2 -->
-            <div class="node source-node" id="node-led">
-                <img src=".assets/bulb.jpg" alt="Light Source" id="img-led">
-                <div class="label">Light Source</div>
-            </div>
-            
-            <div class="node receptor-node" id="node-photoreceptor">
-                <div class="fx-container" id="fx-photo"></div>
-                <img src=".assets/photoreceptor_cells.jpg" alt="Photoreceptors" id="img-photo">
-                <div class="label">Photoreceptors<br><span id="rhodopsin-val" style="color: #8b949e; font-size: 0.75rem;">Pigment: 100%</span></div>
-            </div>
+      /* Webcam DVS View */
+      #dvs-view {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 4/3;
+        background: #000;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+        display: none;
+      }
+      #rawWebcam,
+      #heatmapCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        transform: scaleX(-1);
+        object-fit: cover;
+        transition: opacity 0.2s ease;
+      }
+      #heatmapCanvas {
+        pointer-events: none;
+        opacity: 0.85;
+        mix-blend-mode: screen;
+      }
 
-            <!-- Column 3 -->
-            <div class="column-split">
-                <div class="node bipolar-node" id="node-bipolar-on">
-                    <img src=".assets/bipolar_cell.svg" alt="ON Bipolar" id="img-bipolar-on" style="filter: hue-rotate(180deg);">
-                    <div class="label">ON Bipolar (+dV/dt)</div>
-                </div>
-                <div class="node bipolar-node" id="node-bipolar-off">
-                    <img src=".assets/bipolar_cell.svg" alt="OFF Bipolar" id="img-bipolar-off">
-                    <div class="label">OFF Bipolar (-dV/dt)</div>
-                </div>
-            </div>
+      /* Main Content */
+      #main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      #canvas-container {
+        flex: 1;
+        min-height: 0; /* Critical fix for flexbox overflow cropping */
+        position: relative;
+        background-color: #030303;
+        overflow: hidden;
+      }
+      svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
 
-            <!-- Column 4 -->
-            <div class="column-split">
-                <div class="node ganglion-node" id="node-ganglion-on">
-                    <div class="fx-container" id="fx-ganglion-on"></div>
-                    <img src=".assets/ganglion_cell.png" alt="ON Ganglion">
-                    <div class="label">ON Ganglion</div>
-                    <div class="fill-bar-container">
-                        <div id="fill-on" class="fill-bar fill-on-color"></div>
-                        <div id="thresh-on" class="threshold-line"></div>
-                    </div>
-                </div>
-                <div class="node ganglion-node" id="node-ganglion-off">
-                    <div class="fx-container" id="fx-ganglion-off"></div>
-                    <img src=".assets/ganglion_cell.png" alt="OFF Ganglion">
-                    <div class="label">OFF Ganglion</div>
-                    <div class="fill-bar-container">
-                        <div id="fill-off" class="fill-bar fill-off-color"></div>
-                        <div id="thresh-off" class="threshold-line"></div>
-                    </div>
-                </div>
-            </div>
+      /* SVG Node & Edge Styling */
+      .edge {
+        fill: none;
+        stroke-linecap: round;
+      }
+      .edge-analog {
+        stroke-dasharray: 6, 8;
+        stroke-width: 2.5;
+        opacity: 0.7;
+      }
+      .edge-on {
+        stroke: #00e5ff;
+      }
+      .edge-off {
+        stroke: #ff3d00;
+      }
+      .edge-digital {
+        stroke: #424242;
+        stroke-width: 2.5;
+        opacity: 0.5;
+      }
+      .node-label {
+        font-size: 9px;
+        fill: #757575;
+        font-family: monospace;
+        pointer-events: none;
+        letter-spacing: 1px;
+      }
 
-            <!-- Column 5 -->
-            <div class="column-split">
-                <div class="node nerve-node" id="node-nerve-on">
-                    <img src=".assets/optic_nerve.jpg" alt="ON Nerve">
-                    <div class="label">ON Spike</div>
-                </div>
-                <div class="node nerve-node" id="node-nerve-off">
-                    <img src=".assets/optic_nerve.jpg" alt="OFF Nerve">
-                    <div class="label">OFF Spike</div>
-                </div>
-            </div>
-        </main>
+      /* Smooth Threshold Accumulation Animation */
+      .accumulator {
+        transition:
+          stroke-dashoffset 0.1s ease-out,
+          stroke 0.2s ease-out;
+      }
+
+      /* Bottom Graphs - Scaled Proportionately */
+      .graphs-wrapper {
+        height: 22vh; /* Sizes dynamically relative to the window height */
+        min-height: 150px;
+        max-height: 250px;
+        flex-shrink: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 16px;
+        gap: 16px;
+      }
+      .graph-box {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .graph-box h3 {
+        margin: 0 0 6px 0;
+        font-size: 13px;
+        text-align: center;
+        border: none;
+      }
+      .graph-box canvas {
+        width: 100%;
+        flex: 1;
+        min-height: 0; /* Prevents canvas from pushing boundaries */
+        background: #000;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+      }
+
+      /* Particle FX - Enhanced Glow */
+      .ion {
+        fill: #ffea00; /* Brighter core */
+        pointer-events: none;
+        /* Stacked drop-shadows for a strong, bloom-like emissive glow */
+        filter: drop-shadow(0 0 5px #ff9e00) drop-shadow(0 0 12px #ff6d00);
+      }
+      .vesicle {
+        pointer-events: none;
+      }
+
+      .spike-flash {
+        position: absolute;
+        fill: none;
+        stroke-width: 2;
+        pointer-events: none;
+        animation: spikePulse 0.5s ease-out forwards;
+      }
+      @keyframes spikePulse {
+        0% {
+          transform: scale(1);
+          opacity: 1;
+          stroke-width: 4;
+        }
+        100% {
+          transform: scale(2.5);
+          opacity: 0;
+          stroke-width: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-container">
+      <div id="control-panel">
+        <h2>Retinal Simulator</h2>
+
+        <h3>Stimulus Mode</h3>
+        <div class="input-group">
+          <label>Light Pattern</label>
+          <select id="stimulus-type">
+            <option value="manual">Manual Slider</option>
+            <option value="square">Square Wave</option>
+            <option value="sine">Sine Wave</option>
+            <option value="sawtooth">Sawtooth Wave</option>
+            <option value="webcam">Webcam DVS</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label>Light Level <span id="val-intensity">70</span></label>
+          <input type="range" id="sim-light" min="0" max="100" value="70" />
+        </div>
+
+        <!-- Waveform Dynamic Settings -->
+        <div
+          id="wave-config"
+          style="display: none; flex-direction: column; gap: 10px"
+        >
+          <h3>Waveform Settings</h3>
+          <div class="input-group">
+            <label>Frequency (Hz) <span id="val-wave-freq">1.0</span></label>
+            <input
+              type="range"
+              id="wave-freq"
+              min="0.1"
+              max="10.0"
+              step="0.1"
+              value="1.0"
+            />
+          </div>
+          <div class="input-group">
+            <label>Min Light <span id="val-wave-min">0</span></label>
+            <input type="range" id="wave-min" min="0" max="100" value="0" />
+          </div>
+          <div class="input-group">
+            <label>Max Light <span id="val-wave-max">100</span></label>
+            <input type="range" id="wave-max" min="0" max="100" value="100" />
+          </div>
+          <div class="input-group" id="group-duty" style="display: none">
+            <label>Duty Cycle <span id="val-wave-duty">0.5</span></label>
+            <input
+              type="range"
+              id="wave-duty"
+              min="0.1"
+              max="0.9"
+              step="0.05"
+              value="0.5"
+            />
+          </div>
+        </div>
+
+        <!-- DVS Settings -->
+        <div id="dvs-view">
+          <video id="rawWebcam" autoplay playsinline muted></video>
+          <canvas id="heatmapCanvas"></canvas>
+        </div>
+        <canvas id="hiddenCanvas" style="display: none"></canvas>
+
+        <div
+          id="dvs-config"
+          style="display: none; flex-direction: column; gap: 10px"
+        >
+          <h3>DVS Settings</h3>
+          <div class="input-group">
+            <label>Display Mode</label>
+            <select id="dvs-display">
+              <option value="overlay">Overlay</option>
+              <option value="raw">Raw Video</option>
+              <option value="heat">Heatmap Only</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Palette</label>
+            <select id="dvs-palette">
+              <option value="fire">Fire</option>
+              <option value="classic">Classic (Red/Blue)</option>
+              <option value="matrix">Matrix</option>
+              <option value="ghost">Ghost</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label>Noise Floor <span id="val-dvs-noise">15</span></label>
+            <input type="range" id="dvs-noise" min="2" max="50" value="15" />
+          </div>
+          <div class="input-group">
+            <label>Velocity Gain <span id="val-dvs-vel">20.0</span></label>
+            <input
+              type="range"
+              id="dvs-vel"
+              min="1"
+              max="50"
+              step="0.5"
+              value="20"
+            />
+          </div>
+          <div class="input-group">
+            <label>Trail Decay <span id="val-dvs-trail">0.50</span></label>
+            <input
+              type="range"
+              id="dvs-trail"
+              min="0"
+              max="0.99"
+              step="0.01"
+              value="0.85"
+            />
+          </div>
+        </div>
+
+        <h3>Biochemistry & Noise</h3>
+        <div class="input-group">
+          <label>Gain <span id="val-gain">5.0</span></label>
+          <input
+            type="range"
+            id="sim-gain"
+            min="1"
+            max="50"
+            step="0.5"
+            value="5"
+          />
+        </div>
+        <div class="input-group">
+          <label>Leak Rate <span id="val-leak">2.0</span></label>
+          <input
+            type="range"
+            id="sim-leak"
+            min="0"
+            max="10"
+            step="0.1"
+            value="2"
+          />
+        </div>
+        <div class="input-group">
+          <label>Noise <span id="val-noise">2.0</span></label>
+          <input
+            type="range"
+            id="sim-noise"
+            min="0"
+            max="10"
+            step="0.5"
+            value="2"
+          />
+        </div>
+
+        <h3>Cell Dynamics & Thresholds</h3>
+        <div class="input-group">
+          <label>GC Threshold <span id="val-thresh-gc">80</span></label>
+          <input type="range" id="thresh-gc" min="30" max="150" value="80" />
+        </div>
+        <div class="input-group">
+          <label>LGN Threshold <span id="val-thresh-lgn">0.7</span></label>
+          <input
+            type="range"
+            id="thresh-lgn"
+            min="0.1"
+            max="2.0"
+            step="0.1"
+            value="0.7"
+          />
+        </div>
+        <div class="input-group">
+          <label>LGN Weight <span id="val-weight-lgn">0.45</span></label>
+          <input
+            type="range"
+            id="weight-lgn"
+            min="0.1"
+            max="1.0"
+            step="0.05"
+            value="0.45"
+          />
+        </div>
+        <div class="input-group">
+          <label>V1 Threshold <span id="val-thresh-v1">0.7</span></label>
+          <input
+            type="range"
+            id="thresh-v1"
+            min="0.1"
+            max="2.0"
+            step="0.1"
+            value="0.7"
+          />
+        </div>
+        <div class="input-group">
+          <label>V1 Weight <span id="val-weight-v1">0.45</span></label>
+          <input
+            type="range"
+            id="weight-v1"
+            min="0.1"
+            max="1.0"
+            step="0.05"
+            value="0.45"
+          />
+        </div>
+
+        <h3>Topology Configuration</h3>
+        <div class="input-group">
+          <label>Cell Scale <span id="val-scale">1.0</span></label>
+          <input
+            type="range"
+            id="sim-scale"
+            min="0.5"
+            max="2.5"
+            step="0.1"
+            value="1.0"
+          />
+        </div>
+        <div class="input-group">
+          <label>Photoreceptors</label
+          ><input type="number" id="count-pr" min="2" max="30" value="10" />
+        </div>
+        <div class="input-group">
+          <label>Bipolar Cells</label
+          ><input type="number" id="count-bp" min="2" max="30" value="8" />
+        </div>
+        <div class="input-group">
+          <label>Ganglion Cells</label
+          ><input type="number" id="count-gc" min="1" max="20" value="5" />
+        </div>
+        <div class="input-group">
+          <label>LGN Relays</label
+          ><input type="number" id="count-lgn" min="1" max="10" value="3" />
+        </div>
+        <div class="input-group">
+          <label>V1 Cortex</label
+          ><input type="number" id="count-v1" min="1" max="15" value="6" />
+        </div>
+      </div>
+
+      <div id="main-content">
+        <div id="canvas-container">
+          <svg id="network-svg">
+            <defs>
+              <radialGradient id="spike-grad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#FFF" />
+                <stop offset="100%" stop-color="rgba(255, 255, 255, 0)" />
+              </radialGradient>
+            </defs>
+            <g id="layer-edges"></g>
+            <g id="layer-fx"></g>
+            <g id="layer-nodes"></g>
+            <g id="layer-spikes"></g>
+          </svg>
+        </div>
 
         <section class="graphs-wrapper">
-            <div class="graph-box">
-                <h3 style="color: #00ffcc;">Input Light Intensity</h3>
-                <canvas id="graph-stimulus" width="800" height="80"></canvas>
-            </div>
-            <div class="graph-box">
-                <h3 style="color: #43e97b;">ON Pathway (+dV/dt)</h3>
-                <canvas id="graph-on" width="800" height="120"></canvas>
-            </div>
-            <div class="graph-box">
-                <h3 style="color: #ff758c;">OFF Pathway (-dV/dt)</h3>
-                <canvas id="graph-off" width="800" height="120"></canvas>
-            </div>
+          <div class="graph-box">
+            <h3 style="color: #00ffcc">Input Stimulus</h3>
+            <canvas id="graph-stimulus" width="800" height="150"></canvas>
+          </div>
+          <div class="graph-box">
+            <h3 style="color: #00e5ff">ON Pathway (dV/dt > 0)</h3>
+            <canvas id="graph-on" width="800" height="150"></canvas>
+          </div>
+          <div class="graph-box">
+            <h3 style="color: #ff3d00">OFF Pathway (dV/dt < 0)</h3>
+            <canvas id="graph-off" width="800" height="150"></canvas>
+          </div>
         </section>
+      </div>
     </div>
-    <script type="module" src="js/main.js"></script>
-</body>
+    <script type="module" src="js/main.js?v=11.0"></script>
+  </body>
 </html>

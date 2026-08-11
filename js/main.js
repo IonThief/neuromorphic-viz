@@ -1,331 +1,486 @@
-import { BiologicalPipeline, StimulusController, TimeSeriesData } from './simulation.js';
-import { CanvasRenderer } from './renderer.js';
+import {
+  BiologicalPipeline,
+  StimulusController,
+  NetworkGenerator,
+  Spike
+} from './simulation.js?v=11.0';
+import { CanvasRenderer } from './renderer.js?v=11.0';
+import { DVSProcessor } from './dvs.js?v=11.0';
+
+const SVG_TEMPLATES = {
+  pr: `<rect x="-15" y="-6" width="15" height="12" fill="#546E7A" /><circle cx="0" cy="0" r="10" fill="#263238" stroke="#78909C" stroke-width="1.5" /><circle cx="0" cy="0" r="2" fill="#E0F7FA" class="core-indicator" /><path d="M 10 0 L 15 0" stroke="#757575" stroke-width="2" />`,
+  'bp-on': `<circle cx="0" cy="0" r="11" fill="#004D40" stroke="#00E5FF" stroke-width="1.5" /><circle cx="0" cy="0" r="2" fill="#00E5FF" class="core-indicator" />`,
+  'bp-off': `<circle cx="0" cy="0" r="11" fill="#3E2723" stroke="#FF3D00" stroke-width="1.5" /><circle cx="0" cy="0" r="2" fill="#FF3D00" class="core-indicator" />`,
+  'gc-on': `<circle cx="0" cy="0" r="12" fill="#212121" /><circle cx="0" cy="0" r="16" fill="none" stroke="#00E5FF" stroke-width="2" stroke-dasharray="100" stroke-dashoffset="100" class="accumulator" />`,
+  'gc-off': `<circle cx="0" cy="0" r="12" fill="#212121" /><circle cx="0" cy="0" r="16" fill="none" stroke="#FF3D00" stroke-width="2" stroke-dasharray="100" stroke-dashoffset="100" class="accumulator" />`,
+  lgn: `<polygon points="0,-12 12,0 0,12 -12,0" fill="#311B92" /><circle cx="0" cy="0" r="18" fill="none" stroke="#D1C4E9" stroke-width="2" stroke-dasharray="113" stroke-dashoffset="113" class="accumulator" />`,
+  v1: `<polygon points="-10,10 15,0 -10,-10" fill="#1B5E20" /><circle cx="-2" cy="0" r="12" fill="none" stroke="#C8E6C9" stroke-width="2" stroke-dasharray="75" stroke-dashoffset="75" class="accumulator" />`
+};
 
 class App {
-    constructor() {
-        this.inputs = {
-            stimulus: document.getElementById('stimulus-type'),
-            intensity: document.getElementById('intensity'),
-            gain: document.getElementById('gain'),
-            leak: document.getElementById('leak'),
-            threshold: document.getElementById('threshold'),
-            noise: document.getElementById('noise')
+  constructor() {
+    this.pipeline = new BiologicalPipeline(800);
+    this.stimulus = new StimulusController();
+    this.gen = new NetworkGenerator();
+    this.graph = null;
+    this.spikes = [];
+
+    this.inputs = {
+      type: document.getElementById('stimulus-type'),
+      light: document.getElementById('sim-light'),
+      gain: document.getElementById('sim-gain'),
+      leak: document.getElementById('sim-leak'),
+      noise: document.getElementById('sim-noise'),
+      threshGC: document.getElementById('thresh-gc'),
+      threshLGN: document.getElementById('thresh-lgn'),
+      weightLGN: document.getElementById('weight-lgn'),
+      threshV1: document.getElementById('thresh-v1'),
+      weightV1: document.getElementById('weight-v1'),
+      scale: document.getElementById('sim-scale')
+    };
+
+    this.waveInputs = {
+      freq: document.getElementById('wave-freq'),
+      min: document.getElementById('wave-min'),
+      max: document.getElementById('wave-max'),
+      duty: document.getElementById('wave-duty')
+    };
+
+    this.dvsInputs = {
+      display: document.getElementById('dvs-display'),
+      palette: document.getElementById('dvs-palette'),
+      noise: document.getElementById('dvs-noise'),
+      vel: document.getElementById('dvs-vel'),
+      trail: document.getElementById('dvs-trail')
+    };
+
+    this.renderers = {
+      stimulus: new CanvasRenderer('graph-stimulus', '#00ffcc'),
+      on: new CanvasRenderer('graph-on', '#00e5ff'),
+      off: new CanvasRenderer('graph-off', '#ff3d00')
+    };
+
+    const videoEl = document.getElementById('rawWebcam');
+    const hiddenCanvas = document.getElementById('hiddenCanvas');
+    const heatmapCanvas = document.getElementById('heatmapCanvas');
+    this.dvs = new DVSProcessor(videoEl, hiddenCanvas, heatmapCanvas);
+
+    this.svg = {
+      root: document.getElementById('network-svg'),
+      edges: document.getElementById('layer-edges'),
+      nodes: document.getElementById('layer-nodes'),
+      spikes: document.getElementById('layer-spikes'),
+      fx: document.getElementById('layer-fx')
+    };
+
+    this.domNodes = {};
+    this.domEdges = {};
+
+    this.bindEvents();
+    this.rebuildTopology();
+    requestAnimationFrame((ts) => this.loop(ts));
+  }
+
+  bindEvents() {
+    Object.keys(this.inputs).forEach((key) => {
+      this.inputs[key].addEventListener('input', (e) => {
+        if (key === 'type') {
+          this.stimulus.mode = e.target.value;
+          this.inputs.light.disabled = e.target.value !== 'manual';
+
+          const dvsView = document.getElementById('dvs-view');
+          const dvsConfig = document.getElementById('dvs-config');
+          const waveConfig = document.getElementById('wave-config');
+          const groupDuty = document.getElementById('group-duty');
+
+          if (e.target.value === 'webcam') {
+            dvsView.style.display = 'block';
+            dvsConfig.style.display = 'flex';
+            waveConfig.style.display = 'none';
+            this.dvs
+              .start()
+              .catch((err) => alert('Webcam Error: ' + err.message));
+          } else if (['sine', 'square', 'sawtooth'].includes(e.target.value)) {
+            dvsView.style.display = 'none';
+            dvsConfig.style.display = 'none';
+            waveConfig.style.display = 'flex';
+            groupDuty.style.display =
+              e.target.value === 'square' ? 'flex' : 'none';
+            this.dvs.stop();
+          } else {
+            dvsView.style.display = 'none';
+            dvsConfig.style.display = 'none';
+            waveConfig.style.display = 'none';
+            this.dvs.stop();
+          }
+        } else {
+          const valDisplay = document.getElementById(
+            `val-${key.toLowerCase().replace('thresh', 'thresh-').replace('weight', 'weight-')}`
+          );
+          if (valDisplay)
+            valDisplay.textContent = parseFloat(e.target.value).toFixed(
+              e.target.step ? (e.target.step.includes('.') ? 2 : 1) : 0
+            );
+        }
+        if (key === 'scale') this.rebuildTopology();
+      });
+    });
+
+    Object.keys(this.waveInputs).forEach((key) => {
+      this.waveInputs[key].addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        document.getElementById(`val-wave-${key}`).textContent = val.toFixed(
+          e.target.step ? 2 : 0
+        );
+
+        if (key === 'freq') this.stimulus.frequency = val;
+        if (key === 'min') this.stimulus.minIntensity = val;
+        if (key === 'max') this.stimulus.maxIntensity = val;
+        if (key === 'duty') this.stimulus.dutyCycle = val;
+      });
+    });
+
+    Object.keys(this.dvsInputs).forEach((key) => {
+      this.dvsInputs[key].addEventListener('input', (e) => {
+        const val = ['trail', 'vel'].includes(key)
+          ? parseFloat(e.target.value)
+          : key === 'noise'
+            ? parseInt(e.target.value, 10)
+            : e.target.value;
+        if (document.getElementById(`val-dvs-${key}`)) {
+          document.getElementById(`val-dvs-${key}`).textContent =
+            typeof val === 'number' ? val.toFixed(e.target.step ? 2 : 0) : val;
+        }
+
+        const configMap = {
+          display: 'displayMode',
+          palette: 'heatmapStyle',
+          trail: 'trailDecay',
+          noise: 'noiseThreshold',
+          vel: 'velocityGain'
         };
-        
-        this.displays = {
-            intensity: document.getElementById('intensity-val'),
-            gain: document.getElementById('gain-val'),
-            leak: document.getElementById('leak-val'),
-            threshold: document.getElementById('threshold-val'),
-            noise: document.getElementById('noise-val')
-        };
-        
-        this.svgOverlay = document.getElementById('connection-lines');
-        
-        this.nodes = {
-            led: document.getElementById('node-led'),
-            photo: document.getElementById('node-photoreceptor'),
-            bpON: document.getElementById('node-bipolar-on'),
-            bpOFF: document.getElementById('node-bipolar-off'),
-            gON: document.getElementById('node-ganglion-on'),
-            gOFF: document.getElementById('node-ganglion-off'),
-            nON: document.getElementById('node-nerve-on'),
-            nOFF: document.getElementById('node-nerve-off')
-        };
+        this.dvs.updateConfig({ [configMap[key]]: val });
+      });
+    });
 
-        this.fx = {
-            photo: document.getElementById('fx-photo'),
-            gON: document.getElementById('fx-ganglion-on'),
-            gOFF: document.getElementById('fx-ganglion-off')
-        };
+    document.querySelectorAll('input[type="number"]').forEach((el) => {
+      el.addEventListener('change', () => this.rebuildTopology());
+    });
+    window.addEventListener('resize', () => this.rebuildTopology());
+  }
 
-        this.fills = {
-            on: document.getElementById('fill-on'),
-            off: document.getElementById('fill-off')
-        };
+  rebuildTopology() {
+    const rect = this.svg.root.parentElement.getBoundingClientRect();
+    this.svg.root.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
 
-        this.threshON = document.getElementById('thresh-on');
-        this.threshOFF = document.getElementById('thresh-off');
+    const counts = {
+      pr: parseInt(document.getElementById('count-pr').value) || 10,
+      bp: parseInt(document.getElementById('count-bp').value) || 8,
+      gc: parseInt(document.getElementById('count-gc').value) || 5,
+      lgn: parseInt(document.getElementById('count-lgn').value) || 3,
+      v1: parseInt(document.getElementById('count-v1').value) || 6
+    };
 
-        this.imgPhoto = document.getElementById('img-photo');
-        this.lblRhodopsin = document.getElementById('rhodopsin-val');
-        this.imgBpON = document.getElementById('img-bipolar-on');
-        this.imgBpOFF = document.getElementById('img-bipolar-off');
+    const scale = parseFloat(this.inputs.scale.value);
 
-        this.pipeline = new BiologicalPipeline(800);
-        this.stimulusController = new StimulusController();
-	this.stimulusController.mode = this.inputs.stimulus.value;
-        
-        this.stimulusHistory = new TimeSeriesData(800);
-        
-        this.rendererStimulus = new CanvasRenderer('graph-stimulus', '#00ffcc');
-        this.rendererON = new CanvasRenderer('graph-on', '#43e97b');
-        this.rendererOFF = new CanvasRenderer('graph-off', '#ff758c');
+    this.gen.buildNodes(counts);
+    this.graph = this.gen.layout(rect.width, rect.height, scale);
 
-        this.lastPacketTime = 0;
-        this.lastONTime = 0;
-        this.lastOFFTime = 0;
+    this.spikes = [];
+    this.svg.spikes.innerHTML = '';
+    this.svg.fx.innerHTML = '';
+    this.domNodes = {};
+    this.domEdges = {};
 
-        this.initLines();
-        this.bindEvents();
-        window.addEventListener('resize', () => this.initLines());
+    this.svg.edges.innerHTML = this.graph.edges
+      .map(
+        (e) =>
+          `<path id="${e.id}" class="edge ${e.isAnalog ? 'edge-analog' : 'edge-digital'} edge-${e.type}" d="${e.svgPath}"></path>`
+      )
+      .join('');
+
+    this.svg.nodes.innerHTML = this.graph.nodes
+      .map((n) => {
+        return `<g id="${n.id}" transform="translate(${n.x}, ${n.y}) scale(${scale})">
+          ${SVG_TEMPLATES[n.type]}
+          <text class="node-label" x="-12" y="22">${n.type.toUpperCase()}</text>
+        </g>`;
+      })
+      .join('');
+
+    this.graph.nodes.forEach((n) => {
+      this.domNodes[n.id] = {
+        core: document.querySelector(`#${n.id} .core-indicator`),
+        accumulator: document.querySelector(`#${n.id} .accumulator`),
+        group: document.getElementById(n.id)
+      };
+    });
+    this.graph.edges.forEach((e) => {
+      this.domEdges[e.id] = document.getElementById(e.id);
+    });
+  }
+
+  spawnLeakParticle(node) {
+    const scale = parseFloat(this.inputs.scale.value);
+    const circle = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+
+    circle.setAttribute('r', (4 * scale).toString());
+    circle.setAttribute('fill', '#ffea00');
+
+    circle.style.filter =
+      'drop-shadow(0px 0px 6px #ff9e00) drop-shadow(0px 0px 14px #ff0000)';
+    circle.classList.add('ion');
+
+    circle.setAttribute('cx', node.x + (Math.random() - 0.5) * (24 * scale));
+    circle.setAttribute('cy', node.y + 10 * scale);
+    this.svg.fx.appendChild(circle);
+
+    const fallDistance = 40 + Math.random() * 40;
+    const anim = circle.animate(
+      [
+        { transform: 'translate(0px, 0px)', opacity: 1 },
+        { transform: `translate(0px, ${fallDistance * 0.5}px)`, opacity: 0.9 },
+        { transform: `translate(0px, ${fallDistance}px)`, opacity: 0 }
+      ],
+      {
+        duration: 700 + Math.random() * 500,
+        easing: 'ease-out'
+      }
+    );
+
+    anim.onfinish = () => circle.remove();
+  }
+
+  spawnSynapticVesicle(edge) {
+    const circle = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'circle'
+    );
+    circle.setAttribute('r', '4');
+    const color = edge.type === 'on' ? '#00e5ff' : '#ff3d00';
+    circle.setAttribute('fill', color);
+    circle.style.filter = `drop-shadow(0px 0px 6px ${color})`;
+    circle.classList.add('vesicle');
+    this.svg.fx.appendChild(circle);
+
+    const anim = circle.animate(
+      [
+        { transform: `translate(${edge.p0.x}px, ${edge.p0.y}px)`, opacity: 1 },
+        { transform: `translate(${edge.p3.x}px, ${edge.p3.y}px)`, opacity: 0 }
+      ],
+      { duration: 300, easing: 'linear' }
+    );
+    anim.onfinish = () => circle.remove();
+  }
+
+  spawnCortexFlash(node) {
+    const scale = parseFloat(this.inputs.scale.value);
+    const poly = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'polygon'
+    );
+    poly.setAttribute('points', '-10,10 15,0 -10,-10');
+    poly.classList.add('cortex-flash');
+
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    group.setAttribute(
+      'transform',
+      `translate(${node.x}, ${node.y}) scale(${scale})`
+    );
+    group.appendChild(poly);
+
+    this.svg.fx.appendChild(group);
+    setTimeout(() => group.remove(), 500);
+  }
+
+  loop(now) {
+    if (!this.graph) return requestAnimationFrame((ts) => this.loop(ts));
+
+    const manualIntensity = parseFloat(this.inputs.light.value);
+    const targetIntensity = this.stimulus.getIntensity(now, manualIntensity);
+
+    if (this.stimulus.mode !== 'manual' && this.stimulus.mode !== 'webcam') {
+      this.inputs.light.value = targetIntensity;
+      document.getElementById('val-intensity').textContent =
+        Math.round(targetIntensity);
     }
 
-    bindEvents() {
-        Object.keys(this.inputs).forEach(key => {
-            this.inputs[key].addEventListener('input', () => {
-                if (key === 'stimulus') {
-                    this.stimulusController.mode = this.inputs[key].value;
-                } else {
-                    this.displays[key].textContent = this.inputs[key].value;
-                }
-            });
-        });
+    const params = {
+      intensity: targetIntensity,
+      gain: parseFloat(this.inputs.gain.value),
+      leakRate: parseFloat(this.inputs.leak.value),
+      noise: parseFloat(this.inputs.noise.value),
+      threshGC: parseInt(this.inputs.threshGC.value, 10),
+      threshLGN: parseFloat(this.inputs.threshLGN.value),
+      weightLGN: parseFloat(this.inputs.weightLGN.value),
+      threshV1: parseFloat(this.inputs.threshV1.value),
+      weightV1: parseFloat(this.inputs.weightV1.value)
+    };
+
+    const dvsData =
+      this.stimulus.mode === 'webcam' ? this.dvs.processFrame() : null;
+    this.pipeline.tick(params, dvsData);
+
+    this.renderers.stimulus.draw(this.pipeline.stimulusHistory, null, 100);
+    this.renderers.on.draw(
+      this.pipeline.ganglionON.history,
+      params.threshGC,
+      150
+    );
+    this.renderers.off.draw(
+      this.pipeline.ganglionOFF.history,
+      params.threshGC,
+      150
+    );
+
+    const onNorm = Math.min(1.0, this.pipeline.signalON / 10);
+    const offNorm = Math.min(1.0, this.pipeline.signalOFF / 10);
+
+    this.graph.nodes.forEach((n) => {
+      if (n.type === 'pr') n.charge = params.intensity / 100;
+      else if (n.type === 'bp-on') n.charge = onNorm;
+      else if (n.type === 'bp-off') n.charge = offNorm;
+      else if (n.type === 'gc-on')
+        n.charge = this.pipeline.ganglionON.voltage / params.threshGC;
+      else if (n.type === 'gc-off')
+        n.charge = this.pipeline.ganglionOFF.voltage / params.threshGC;
+      else n.charge = Math.max(0, n.charge - params.leakRate * 0.005);
+
+      if (
+        n.type !== 'pr' &&
+        n.charge > 0.05 &&
+        Math.random() < params.leakRate * 0.015
+      ) {
+        this.spawnLeakParticle(n);
+      }
+    });
+
+    if (this.pipeline.ganglionON.isSpiking) {
+      this.graph.nodes
+        .filter((n) => n.type === 'gc-on')
+        .forEach((n) => (n.charge = 1.0));
+    }
+    if (this.pipeline.ganglionOFF.isSpiking) {
+      this.graph.nodes
+        .filter((n) => n.type === 'gc-off')
+        .forEach((n) => (n.charge = 1.0));
     }
 
-    initLines() {
-        this.svgOverlay.innerHTML = '';
-        this.drawLine(this.nodes.led, this.nodes.photo);
-        this.drawLine(this.nodes.photo, this.nodes.bpON);
-        this.drawLine(this.nodes.photo, this.nodes.bpOFF);
-        this.drawLine(this.nodes.bpON, this.nodes.gON);
-        this.drawLine(this.nodes.gON, this.nodes.nON);
-        this.drawLine(this.nodes.bpOFF, this.nodes.gOFF);
-        this.drawLine(this.nodes.gOFF, this.nodes.nOFF);
+    if (params.noise > 0 && Math.random() < params.noise * 0.05) {
+      const prNodes = this.graph.nodes.filter((n) => n.type === 'pr');
+      if (prNodes.length > 0) {
+        const pr = prNodes[Math.floor(Math.random() * prNodes.length)];
+        const prEdges = this.graph.edges.filter((e) => e.source === pr);
+        if (prEdges.length > 0) {
+          const edge = prEdges[Math.floor(Math.random() * prEdges.length)];
+          this.spawnSynapticVesicle(edge);
+        }
+      }
     }
 
-    spawnIonParticle(node) {
-        const rect = node.getBoundingClientRect();
-        const svgRect = this.svgOverlay.getBoundingClientRect();
+    this.graph.nodes.forEach((n) => {
+      if (this.domNodes[n.id].core) {
+        this.domNodes[n.id].core.setAttribute('r', 2 + n.charge * 6);
+      }
 
-        const startX = rect.left + rect.width / 2 - svgRect.left + (Math.random() - 0.5) * 40;
-        const startY = rect.bottom - svgRect.top - 10;
+      if (this.domNodes[n.id].accumulator) {
+        const threshVal =
+          n.type === 'lgn'
+            ? params.threshLGN
+            : n.type === 'v1'
+              ? params.threshV1
+              : 1.0;
+        const normCharge = n.charge / threshVal;
 
-        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('r', '2');
-        circle.classList.add('ion');
-        this.svgOverlay.appendChild(circle);
-
-        const animation = circle.animate([
-            { transform: `translate(${startX}px, ${startY}px)`, opacity: 1 },
-            { transform: `translate(${startX}px, ${startY + 30 + Math.random() * 20}px)`, opacity: 0 }
-        ], {
-            duration: 400 + Math.random() * 300,
-            easing: 'ease-in'
-        });
-
-        animation.onfinish = () => circle.remove();
-    }
-
-    drawLine(nodeA, nodeB) {
-        const rectA = nodeA.getBoundingClientRect();
-        const rectB = nodeB.getBoundingClientRect();
-        const svgRect = this.svgOverlay.getBoundingClientRect();
-
-        const x1 = rectA.left + rectA.width / 2 - svgRect.left;
-        const y1 = rectA.top + 35 - svgRect.top; 
-        const x2 = rectB.left + rectB.width / 2 - svgRect.left;
-        const y2 = rectB.top + 35 - svgRect.top;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', x1);
-        line.setAttribute('y1', y1);
-        line.setAttribute('x2', x2);
-        line.setAttribute('y2', y2);
-        line.setAttribute('stroke', '#30363d');
-        line.setAttribute('stroke-width', '2');
-        this.svgOverlay.appendChild(line);
-    }
-
-    spawnPacket(startNode, endNode, type = 'normal', options = {}) {
-        return new Promise(resolve => {
-            const rectA = startNode.getBoundingClientRect();
-            const rectB = endNode.getBoundingClientRect();
-            const svgRect = this.svgOverlay.getBoundingClientRect();
-
-            const cxA = rectA.left + rectA.width / 2 - svgRect.left;
-            const cyA = rectA.top + rectA.height / 2 - svgRect.top;
-            
-            let x1 = cxA;
-            let y1 = rectA.top + 35 - svgRect.top;
-            
-            const x2 = rectB.left + rectB.width / 2 - svgRect.left;
-            const y2 = rectB.top + 35 - svgRect.top;
-
-            if (type.includes('noise')) {
-                const angle = Math.random() * Math.PI * 2;
-                const radius = 40; 
-                x1 = cxA + Math.cos(angle) * radius;
-                y1 = cyA + Math.sin(angle) * radius;
-            }
-
-            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            
-            if (type.includes('spike')) {
-                circle.setAttribute('r', '6');
-                circle.classList.add('packet', type);
-            } else if (type === 'delta-on') {
-                circle.setAttribute('r', '4');
-                circle.classList.add('packet-on');
-            } else if (type === 'delta-off') {
-                circle.setAttribute('r', '4');
-                circle.classList.add('packet-off');
-            } else if (type.includes('noise')) {
-                circle.setAttribute('r', '3');
-                circle.classList.add(type === 'noise-on' ? 'vesicle-on' : 'vesicle-off');
-            } else {
-                circle.classList.add('packet');
-                if (options.intensity !== undefined) {
-                    const radius = 2 + (options.intensity / 100) * 3; 
-                    const glow = options.intensity / 100;
-                    circle.setAttribute('r', radius.toString());
-                    circle.style.opacity = Math.max(0.3, glow);
-                    circle.style.filter = `drop-shadow(0 0 ${4 + glow * 8}px #00ffcc)`;
-                } else {
-                    circle.setAttribute('r', '3');
-                }
-            }
-            
-            this.svgOverlay.appendChild(circle);
-
-            const duration = type.includes('spike') ? 200 : (type.includes('noise') ? 350 : 300); 
-
-            const animation = circle.animate([
-                { transform: `translate(${x1}px, ${y1}px)` },
-                { transform: `translate(${x2}px, ${y2}px)` }
-            ], {
-                duration: duration,
-                easing: 'linear'
-            });
-
-            animation.onfinish = () => {
-                circle.remove();
-                resolve(); 
-            };
-        });
-    }
-
-    triggerRipple(container, type = 'receptor') {
-        const ripple = document.createElement('div');
-        ripple.classList.add(type === 'receptor' ? 'receptor-ripple' : 'micro-ripple');
-        container.appendChild(ripple);
-        setTimeout(() => ripple.remove(), 400); 
-    }
-
-    handleVisuals(now, params) {
-        const maxThreshold = 150; 
-        const threshPct = (params.threshold / maxThreshold) * 100;
-        this.threshON.style.left = `${Math.min(100, threshPct)}%`;
-        this.threshOFF.style.left = `${Math.min(100, threshPct)}%`;
-
-        const rhodopsinPct = Math.round(this.pipeline.rhodopsin * 100);
-        this.lblRhodopsin.textContent = `Pigment: ${rhodopsinPct}%`;
-        this.imgPhoto.style.filter = `grayscale(${100 - rhodopsinPct}%) brightness(${0.5 + (this.pipeline.rhodopsin * 0.5)})`;
-
-        const polarON = Math.min(1, this.pipeline.signalON / (20 * (params.gain / 5)));
-        const polarOFF = Math.min(1, this.pipeline.signalOFF / (20 * (params.gain / 5)));
-        
-        this.imgBpON.style.boxShadow = `0 0 15px 2px rgba(67, 233, 123, ${polarON})`;
-        this.imgBpON.style.borderColor = `rgba(67, 233, 123, ${Math.max(0.2, polarON)})`;
-        
-        this.imgBpOFF.style.boxShadow = `0 0 15px 2px rgba(255, 117, 140, ${polarOFF})`;
-        this.imgBpOFF.style.borderColor = `rgba(255, 117, 140, ${Math.max(0.2, polarOFF)})`;
-
-        this.fills.on.style.width = `${Math.min(100, (this.pipeline.ganglionON.voltage / maxThreshold) * 100)}%`;
-        this.fills.off.style.width = `${Math.min(100, (this.pipeline.ganglionOFF.voltage / maxThreshold) * 100)}%`;
-
-        if (params.leakRate > 0) {
-            if (this.pipeline.ganglionON.voltage > 0 && Math.random() < (params.leakRate * 0.05)) {
-                this.spawnIonParticle(this.nodes.gON);
-            }
-            if (this.pipeline.ganglionOFF.voltage > 0 && Math.random() < (params.leakRate * 0.05)) {
-                this.spawnIonParticle(this.nodes.gOFF);
-            }
+        if (normCharge >= 1.0) {
+          n.charge = 0;
+          const outgoingEdges = this.graph.edges.filter((e) => e.source === n);
+          if (outgoingEdges.length > 0) {
+            outgoingEdges.forEach((edge) => this.spikes.push(new Spike(edge)));
+          } else if (n.type === 'v1') {
+            this.spawnCortexFlash(n);
+          }
         }
 
-        if (params.noise > 0) {
-            if (Math.random() < (params.noise * 0.015)) {
-                this.spawnPacket(this.nodes.bpON, this.nodes.gON, 'noise-on').then(() => this.triggerRipple(this.fx.gON, 'micro'));
-            }
-            if (Math.random() < (params.noise * 0.015)) {
-                this.spawnPacket(this.nodes.bpOFF, this.nodes.gOFF, 'noise-off').then(() => this.triggerRipple(this.fx.gOFF, 'micro'));
-            }
+        const circum = n.type.includes('gc')
+          ? 100
+          : n.type === 'lgn'
+            ? 113
+            : 75;
+        this.domNodes[n.id].accumulator.style.strokeDashoffset =
+          circum - Math.min(1.0, normCharge) * circum;
+
+        let ringColor = '#FFF';
+        if (normCharge > 0.9) ringColor = '#FFF';
+        else if (n.type === 'gc-on') ringColor = '#00e5ff';
+        else if (n.type === 'gc-off') ringColor = '#ff3d00';
+        else if (n.type === 'lgn') ringColor = '#D1C4E9';
+        else if (n.type === 'v1') ringColor = '#C8E6C9';
+        this.domNodes[n.id].accumulator.style.stroke = ringColor;
+      }
+    });
+
+    this.graph.edges.forEach((e) => {
+      if (e.isAnalog) {
+        e.dashOffset -= e.source.charge * 1.5;
+        this.domEdges[e.id].style.strokeDashoffset = e.dashOffset;
+      }
+    });
+
+    for (let i = this.spikes.length - 1; i >= 0; i--) {
+      const s = this.spikes[i];
+      s.progress += s.speed;
+
+      if (s.progress >= 1.0) {
+        const target = s.edge.target;
+        if (target.charge !== undefined && !target.type.includes('gc')) {
+          const addedWeight =
+            target.type === 'lgn'
+              ? params.weightLGN
+              : target.type === 'v1'
+                ? params.weightV1
+                : 0.35;
+          target.charge = Math.min(2.0, target.charge + addedWeight);
+        }
+        if (s.domElement) s.domElement.remove();
+        this.spikes.splice(i, 1);
+      } else {
+        const u = 1 - s.progress;
+        const tt = s.progress * s.progress;
+        const uu = u * u;
+        const x =
+          uu * u * s.edge.p0.x +
+          3 * uu * s.progress * s.edge.p1.x +
+          3 * u * tt * s.edge.p2.x +
+          tt * s.progress * s.edge.p3.x;
+        const y =
+          uu * u * s.edge.p0.y +
+          3 * uu * s.progress * s.edge.p1.y +
+          3 * u * tt * s.edge.p2.y +
+          tt * s.progress * s.edge.p3.y;
+
+        if (!s.domElement) {
+          s.domElement = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'circle'
+          );
+          s.domElement.setAttribute('fill', '#ffffff');
+          s.domElement.style.filter = 'drop-shadow(0px 0px 8px #ffffff)';
+          this.svg.spikes.appendChild(s.domElement);
         }
 
-        const rawStimulus = params.intensity * 0.4;
-        if (rawStimulus > 0 && (now - this.lastPacketTime > (1000 / (rawStimulus + 1)))) {
-            this.lastPacketTime = now;
-            this.spawnPacket(this.nodes.led, this.nodes.photo, 'normal', { intensity: params.intensity }).then(() => {
-                this.triggerRipple(this.fx.photo, 'receptor');
-            });
-        }
-
-        if (this.pipeline.signalON > 0.5 && (now - this.lastONTime > (1000 / (this.pipeline.signalON * 2 + 1)))) {
-            this.lastONTime = now;
-            this.spawnPacket(this.nodes.photo, this.nodes.bpON, 'delta-on');
-        }
-        
-        if (this.pipeline.signalOFF > 0.5 && (now - this.lastOFFTime > (1000 / (this.pipeline.signalOFF * 2 + 1)))) {
-            this.lastOFFTime = now;
-            this.spawnPacket(this.nodes.photo, this.nodes.bpOFF, 'delta-off');
-        }
-
-        if (this.pipeline.ganglionON.isSpiking) {
-            this.nodes.gON.classList.add('spike-on-glow');
-            this.nodes.nON.classList.add('spike-on-glow');
-            this.spawnPacket(this.nodes.gON, this.nodes.nON, 'packet-on');
-            setTimeout(() => {
-                this.nodes.gON.classList.remove('spike-on-glow');
-                this.nodes.nON.classList.remove('spike-on-glow');
-            }, 100);
-        }
-
-        if (this.pipeline.ganglionOFF.isSpiking) {
-            this.nodes.gOFF.classList.add('spike-off-glow');
-            this.nodes.nOFF.classList.add('spike-off-glow');
-            this.spawnPacket(this.nodes.gOFF, this.nodes.nOFF, 'packet-off');
-            setTimeout(() => {
-                this.nodes.gOFF.classList.remove('spike-off-glow');
-                this.nodes.nOFF.classList.remove('spike-off-glow');
-            }, 100);
-        }
+        const radius = 3 + Math.sin(s.progress * Math.PI * 10) * 2;
+        s.domElement.setAttribute('r', radius);
+        s.domElement.setAttribute('cx', x);
+        s.domElement.setAttribute('cy', y);
+      }
     }
 
-    loop(now) {
-        const manualIntensity = parseInt(this.inputs.intensity.value, 10);
-        const autoIntensity = this.stimulusController.getIntensity(now, manualIntensity);
-
-        if (this.stimulusController.mode !== 'manual') {
-            this.inputs.intensity.value = autoIntensity;
-            this.displays.intensity.textContent = Math.round(autoIntensity);
-        }
-
-        const params = {
-            intensity: autoIntensity,
-            gain: parseFloat(this.inputs.gain.value),
-            leakRate: parseFloat(this.inputs.leak.value),
-            threshold: parseInt(this.inputs.threshold.value, 10),
-            noise: parseFloat(this.inputs.noise.value)
-        };
-
-        this.stimulusHistory.push(params.intensity, 0);
-        this.pipeline.tick(params);
-        
-        this.rendererStimulus.draw(this.stimulusHistory, null, 100); 
-        this.rendererON.draw(this.pipeline.ganglionON.history, params.threshold, 150);
-        this.rendererOFF.draw(this.pipeline.ganglionOFF.history, params.threshold, 150);
-        
-        this.handleVisuals(now, params);
-        
-        requestAnimationFrame((ts) => this.loop(ts));
-    }
-
-    start() {
-        requestAnimationFrame((ts) => this.loop(ts));
-    }
+    requestAnimationFrame((ts) => this.loop(ts));
+  }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    const app = new App();
-    app.start();
-});
+document.addEventListener('DOMContentLoaded', () => new App());
