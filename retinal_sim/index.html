@@ -97,11 +97,11 @@
       /* Webcam DVS View */
       #dvs-view {
         position: relative;
-        width: 100%;
-        aspect-ratio: 4/3;
+        flex: 0 0 45%; /* Takes up 45% of the main view when active */
+        min-width: 400px;
+        max-width: 800px;
         background: #000;
-        border-radius: 8px;
-        border: 1px solid var(--border);
+        border-right: 1px solid var(--border);
         overflow: hidden;
         display: none;
       }
@@ -113,13 +113,8 @@
         width: 100%;
         height: 100%;
         transform: scaleX(-1);
-        object-fit: cover;
+        object-fit: contain; /* Changed from 'cover' to 'contain' to prevent cropping */
         transition: opacity 0.2s ease;
-      }
-      #heatmapCanvas {
-        pointer-events: none;
-        opacity: 0.85;
-        mix-blend-mode: screen;
       }
 
       /* Main Content */
@@ -128,6 +123,11 @@
         display: flex;
         flex-direction: column;
         min-width: 0;
+      }
+      .top-section {
+        display: flex;
+        flex: 1;
+        min-height: 0;
       }
       #canvas-container {
         flex: 1;
@@ -265,7 +265,6 @@
           <input type="range" id="sim-light" min="0" max="100" value="70" />
         </div>
 
-        <!-- Waveform Dynamic Settings -->
         <div
           id="wave-config"
           style="display: none; flex-direction: column; gap: 10px"
@@ -303,11 +302,6 @@
           </div>
         </div>
 
-        <!-- DVS Settings -->
-        <div id="dvs-view">
-          <video id="rawWebcam" autoplay playsinline muted></video>
-          <canvas id="heatmapCanvas"></canvas>
-        </div>
         <canvas id="hiddenCanvas" style="display: none"></canvas>
 
         <div
@@ -480,19 +474,25 @@
       </div>
 
       <div id="main-content">
-        <div id="canvas-container">
-          <svg id="network-svg">
-            <defs>
-              <radialGradient id="spike-grad" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stop-color="#FFF" />
-                <stop offset="100%" stop-color="rgba(255, 255, 255, 0)" />
-              </radialGradient>
-            </defs>
-            <g id="layer-edges"></g>
-            <g id="layer-fx"></g>
-            <g id="layer-nodes"></g>
-            <g id="layer-spikes"></g>
-          </svg>
+        <div class="top-section">
+          <div id="dvs-view">
+            <video id="rawWebcam" autoplay playsinline muted></video>
+            <canvas id="heatmapCanvas"></canvas>
+          </div>
+          <div id="canvas-container">
+            <svg id="network-svg">
+              <defs>
+                <radialGradient id="spike-grad" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#FFF" />
+                  <stop offset="100%" stop-color="rgba(255, 255, 255, 0)" />
+                </radialGradient>
+              </defs>
+              <g id="layer-edges"></g>
+              <g id="layer-fx"></g>
+              <g id="layer-nodes"></g>
+              <g id="layer-spikes"></g>
+            </svg>
+          </div>
         </div>
 
         <section class="graphs-wrapper">
